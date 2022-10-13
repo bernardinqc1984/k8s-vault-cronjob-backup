@@ -1,0 +1,29 @@
+namespace: vault
+
+resources:
+  - ./vault-namespace.yaml
+  - ./vault-cronjob.yaml
+
+helmCharts:
+  - name: vault
+    includeCRDs: true
+    repo: https://helm.releases.hashicorp.com
+    releaseName: vault
+    namespace: vault
+    version: 0.22.0
+    valuesInline:
+      server:
+        ha:
+          enabled: true
+          raft:
+            enabled: true
+      dev:
+        enabled: true
+      ui:
+        enabled: true
+        serviceType: 'ClusterIP'
+        serviceNodePort: null
+        externalPort: 8200
+        targetPort: 8200
+      injector:
+        enabled: false
