@@ -1,0 +1,64 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: vault-snapshot-cronjob
+spec:
+  schedule: '@every 24h'
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          volumes:
+            - name: share
+              emptyDir: {}
+          initContainers:
+            - name: jq # Vault Container Doesn't have jq installed so we inject jq into the vault container from initContainer
+              image: stedolan/jq
+              imagePullPolicy: IfNotPresent
+              command:
+                - /bin/sh
+              args:
+                - -ec
+                - |
+                  chmod +x /usr/local/bin/jq;
+                  cp /usr/local/bin/jq /jq;
+              volumeMounts:
+                - name: share
+                  mountPath: /jq
+          containers:
+            - name: snapshot
+              image: vault:1.7.2
+              imagePullPolicy: IfNotPresent
+              command:
+                - /bin/sh
+              args:
+                - -ec
+                - |
+                  export VAULT_TOKEN=$(vault write auth/approle/login role_id=$VAULT_APPROLE_ROLE_ID secret_id=$VAULT_APPROLE_SECRET_ID -format=json | /share/jq -r .auth.client_token);
+                  vault operator raft snapshot save /share/vault-raft.snap;
+              envFrom:
+                - secretRef:
+                    name: vault-snapshot-agent-token
+              env:
+                - name: VAULT_ADDR
+                  value: http://vault-active.vault.svc.cluster.local:8200
+              volumeMounts:
+                - mountPath: /share
+                  name: share
+            - name: upload
+              image: amazon/aws-cli:2.2.14
+              imagePullPolicy: IfNotPresent
+              command:
+                - /bin/sh
+              args: # s3://PUT_YOUR_BUCKET_NAME should be matched with bucket name that you created from create-aws-resources.sh
+                - -ec
+                - |
+                  until [ -f /share/vault-raft.snap ]; do sleep 5; done;
+                  aws s3 cp /share/vault-raft.snap s3://PUT_YOUR_BUCKET_NAME/vault_raft_$(date +"%Y%m%d_%H%M%S").snap;
+              envFrom:
+                - secretRef:
+                    name: aws-secret # We need AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY with S3 Upload permission
+              volumeMounts:
+                - mountPath: /share
+                  name: share
+          restartPolicy: OnFailure
